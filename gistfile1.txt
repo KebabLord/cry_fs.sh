@@ -2,7 +2,7 @@
 # Script to mount & umount encrypted image to android filesystem
 #
 # You can install the dependencies by:
-#  pkg install termux-root # Enables the root-repository
+#  pkg install root-repo # Enables the root-repository
 #  pkg install tsu cryptsetup mount-utils util-linux
 #
 # You have to create an empty container before using this script
@@ -28,7 +28,7 @@ MNT_PATH=$(readlink -f $MNT_PATH)
 
 function check_dependency(){
     depends="cryptsetup losetup nsenter mount sudo"
-    err_msg="You can install the dependencies by:\n  pkg install termux-root #Enable root repo\n  pkg install tsu cryptsetup mount-utils util-linux"
+    err_msg="You can install the dependencies by:\n  pkg install root-repo #Enable root repo\n  pkg install tsu cryptsetup mount-utils util-linux"
     for cmd in $depends; do
         if ! command -v "$cmd" &>/dev/null; then
             echo "ERROR: $cmd not found on path."
