@@ -46,9 +46,9 @@ function load_luks(){
         lo=$(awk -F ':' '{print $1}' <<< $lo_res)
         echo " - Loopback found at: $lo"
     else 
-        lo=$(sudo losetup -f --show "$IMG_PATH") || (
+        lo=$(sudo losetup -f --show "$IMG_PATH") || {
             echo "ERROR: Binding loopback failed."; exit 1
-        )
+        }
         echo " - Loopback created at: $lo"
     fi
 
