@@ -32,12 +32,10 @@ TYPE=luks2
 #OPT: Default name of the LUKS device for the mapper, (can be anything)
 MAP_NAME="cry_fs"
 
-# Get the full path of given files, exit if invalid.
-IMG_PATH=$(readlink -fve "$IMG_PATH") || exit 1
-MNT_PATH=$(readlink -fve "$MNT_PATH") || exit 1
 
-
+# Validate if everything is set correctly
 function check_dependency(){
+    # Check if all dependencies are installed.
     depends="cryptsetup losetup nsenter mount sudo"
     err_msg="You can install the dependencies by:\n  pkg install root-repo #Enable root repo\n  pkg install tsu cryptsetup mount-utils util-linux"
     for cmd in $depends; do
@@ -47,9 +45,18 @@ function check_dependency(){
             exit 12
         fi
     done
+    
+    # Fetch the full path of given files, validate their existence
+    IMG_PATH=$(readlink -fve "$IMG_PATH");file1=$?
+    MNT_PATH=$(readlink -fve "$MNT_PATH");file2=$?
+    if [[ $file1!=0 || $file2!=0 ]]; then
+        echo "ERROR: The mount folder or the container file is not configured or doesn't exist."
+        echo "Please configure them by editing the IMG_PATH and MNT_PATH in script."
+        exit 1
+    fi
 }
 
-# Function that: Binds loopback & Formats & Encrypts & Mounts if necessary.
+# Function that: Binds loopback & Formats & Encrypts & Mkfs & Mounts if necessary.
 function load_luks(){
     # Check if loopback device for container file already exist, create if doesn't.
     lo_res=$(sudo losetup -a | grep "$IMG_PATH")
