@@ -54,6 +54,7 @@ function load_luks(){
 
     # Check if the lo is already a valid LUKS device, format if it's not.
     if ! sudo cryptsetup isLuks $lo; then
+        reset -w &>/dev/null # Some old SU binaries corrupt the width, fix for the next stdin.
         read -p "!) The block doesn't look like it's LUKS formatted, do it now? (y/n) " answer
         [[ $answer != "y" && $answer != "Y" ]] && { echo "Then please format it manually before mounting it."; exit 2; }
         sudo cryptsetup luksFormat "$lo" || { echo "ERROR: Something went wrong with formatting"; exit 3; }
@@ -104,8 +105,10 @@ function eject_luks(){
     done
 
     # Close the LUKS device
-    sudo cryptsetup luksClose $MAP_NAME || { echo "ERROR: Couldn't close $MAP_NAME."; exit 8; }
-    echo " - Successfully closed $MAP_NAME."
+    if ! sudo ls "/dev/mapper/$MAP_NAME" &>/dev/null; then
+        sudo cryptsetup luksClose $MAP_NAME || { echo "ERROR: Couldn't close $MAP_NAME."; exit 8; }
+        echo " - Successfully closed $MAP_NAME."
+    fi
 
     # Remove the loopback device
     lo_res=$(sudo losetup -a | grep "$IMG_PATH") || { echo "ERROR: Couldn't find the loopback"; exit 9; }
