@@ -13,18 +13,24 @@
 # Please configure the IMG_PATH to be the location of the image file you created
 # and MNT_PATH to be the mount point of your decrypted partition
 
-# Path to the existing container file
+#OPT: Path to the existing container file
 IMG_PATH="/path/to/your/file.img"
 
-# Path to the mount point
+#OPT: Path to the mount point
 MNT_PATH="/path/to/your/mountpoint"
 
-# Default name of the LUKS device for the mapper, (can be anything)
+#OPT: PBKDF algorithm to be used: pbkdf2, argon2id, argon2i
+PBKDF=pbkdf2
+
+#OPT: Type of device metadata: luks1, luks2, plain, loopaes, tcrypt
+TYPE=luks2
+
+#OPT: Default name of the LUKS device for the mapper, (can be anything)
 MAP_NAME="cry_fs"
 
-TMP_FILE="$TMPDIR/cryptbro.tmp"
-IMG_PATH=$(readlink -f "$IMG_PATH")
-MNT_PATH=$(readlink -f $MNT_PATH)
+# Get the full path of given files, exit if invalid.
+IMG_PATH=$(readlink -fve "$IMG_PATH") || exit 1
+MNT_PATH=$(readlink -fve "$MNT_PATH") || exit 1
 
 function check_dependency(){
     depends="cryptsetup losetup nsenter mount sudo"
@@ -57,7 +63,7 @@ function load_luks(){
         reset -w &>/dev/null # Some old SU binaries corrupt the width, fix for the next stdin.
         read -p "!) The block doesn't look like it's LUKS formatted, do it now? (y/n) " answer
         [[ $answer != "y" && $answer != "Y" ]] && { echo "Then please format it manually before mounting it."; exit 2; }
-        sudo cryptsetup luksFormat "$lo" || { echo "ERROR: Something went wrong with formatting"; exit 3; }
+        sudo cryptsetup luksFormat --type $TYPE --pbkdf $PBKDF "$lo" || { echo "ERROR: Something went wrong with formatting"; exit 3; }
         echo " - Successfully formatted the block as LUKS device."
     else
         echo " - Validated LUKS device."
