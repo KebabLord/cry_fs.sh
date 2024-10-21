@@ -70,7 +70,7 @@ function load_luks(){
         [[ $answer != "y" && $answer != "Y" ]] && { echo "Then please format it manually before mounting it."; exit 2; }
         sudo cryptsetup luksFormat --type $TYPE --pbkdf $PBKDF "$lo" || { echo "ERROR: Something went wrong with formatting"; exit 3; }
         echo " - Successfully formatted the block as LUKS device."
-        is_Formatted=1
+        isFormatted=1
     else
         echo " - Validated LUKS device."
     fi
