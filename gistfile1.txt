@@ -19,6 +19,10 @@ IMG_PATH="/path/to/your/file.img"
 #OPT: Path to the mount point
 MNT_PATH="/path/to/your/mountpoint"
 
+#OPT: Default filesystem for the block: ext4, exfat, ext3
+# - More filesystems could be supported depending on your system
+FORMAT_FS=ext4
+
 #OPT: PBKDF algorithm to be used: pbkdf2, argon2id, argon2i
 PBKDF=pbkdf2
 
@@ -31,6 +35,7 @@ MAP_NAME="cry_fs"
 # Get the full path of given files, exit if invalid.
 IMG_PATH=$(readlink -fve "$IMG_PATH") || exit 1
 MNT_PATH=$(readlink -fve "$MNT_PATH") || exit 1
+
 
 function check_dependency(){
     depends="cryptsetup losetup nsenter mount sudo"
@@ -65,6 +70,7 @@ function load_luks(){
         [[ $answer != "y" && $answer != "Y" ]] && { echo "Then please format it manually before mounting it."; exit 2; }
         sudo cryptsetup luksFormat --type $TYPE --pbkdf $PBKDF "$lo" || { echo "ERROR: Something went wrong with formatting"; exit 3; }
         echo " - Successfully formatted the block as LUKS device."
+        is_Formatted=1
     else
         echo " - Validated LUKS device."
     fi
@@ -77,12 +83,18 @@ function load_luks(){
     else
         echo " - Found the mapper at /dev/mapper/$MAP_NAME"
     fi
+    
+    # Build a valid filesystem / partition at the container
+    if [[ "$isFormatted" == "1" ]]; then
+        sudo mkfs -t $FORMAT_FS /dev/mapper/$MAP_NAME || { echo "ERROR: Couldn't create filesystem."; exit 5; }
+        echo " - Created $FORMAT_FS file system."
+    fi
 
     # Mount the mapper device if not already mounted.
     if ! mount | grep /dev/mapper/$MAP_NAME; then
         #sudo mount /dev/mapper/$MAP_NAME $MNT_PATH || {                 # Mount only for termux namespace
         sudo nsenter -t 1 -m mount /dev/mapper/$MAP_NAME $MNT_PATH || {  # Make mount available to all namespaces
-            echo "ERROR: Couldn't mount the mapper."; exit 5; }
+            echo "ERROR: Couldn't mount the mapper."; exit 6; }
         echo " - Successfully mounted the $MAP_NAME at $MNT_PATH"
     else
         echo " - Device already mounted at above locations"
@@ -97,7 +109,7 @@ function eject_luks(){
     while : ; do
         mounts=$(sudo nsenter -t 1 -m mount | grep /dev/mapper/$MAP_NAME ) || break
         mnt=$(awk -F ' on ' '{print $2}' <<< $mounts | awk -F ' type ' '{print $1}' | head -n 1)
-        sudo nsenter -t 1 -m umount "$mnt" || { echo "ERROR: Couldn't unmount $mnt , program exiting."; exit 6; }
+        sudo nsenter -t 1 -m umount "$mnt" || { echo "ERROR: Couldn't unmount $mnt , program exiting."; exit 7; }
         echo " - Unmounted: $mnt"
     done
 
@@ -106,20 +118,20 @@ function eject_luks(){
     while : ; do
         mounts=$(sudo nsenter -t $pid -m mount | grep /dev/mapper/$MAP_NAME ) || break
         mnt=$(awk -F ' on ' '{print $2}' <<< $mounts | awk -F ' type ' '{print $1}' | head -n 1)
-        sudo nsenter -t $pid -m umount "$mnt" || { echo "ERROR: Couldn't unmount $mnt , program exiting."; exit 7; }
+        sudo nsenter -t $pid -m umount "$mnt" || { echo "ERROR: Couldn't unmount $mnt , program exiting."; exit 8; }
         echo " - Unmounted: $mnt"
     done
 
     # Close the LUKS device
-    if ! sudo ls "/dev/mapper/$MAP_NAME" &>/dev/null; then
-        sudo cryptsetup luksClose $MAP_NAME || { echo "ERROR: Couldn't close $MAP_NAME."; exit 8; }
+    if sudo ls "/dev/mapper/$MAP_NAME" &>/dev/null; then
+        sudo cryptsetup luksClose $MAP_NAME || { echo "ERROR: Couldn't close $MAP_NAME."; exit 9; }
         echo " - Successfully closed $MAP_NAME."
     fi
 
     # Remove the loopback device
-    lo_res=$(sudo losetup -a | grep "$IMG_PATH") || { echo "ERROR: Couldn't find the loopback"; exit 9; }
+    lo_res=$(sudo losetup -a | grep "$IMG_PATH") || { echo "ERROR: Couldn't find the loopback"; exit 10; }
     lo=$(awk -F ':' '{print $1}' <<< $lo_res)
-    sudo losetup -d $lo || { echo "ERROR: Couldn't release the loopback device"; exit 10; }
+    sudo losetup -d $lo || { echo "ERROR: Couldn't release the loopback device"; exit 11; }
     echo " - Successfully released loopback device."
 }
 
