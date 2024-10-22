@@ -32,6 +32,10 @@ TYPE=luks2
 #OPT: Default name of the LUKS device for the mapper, (can be anything)
 MAP_NAME="cry_fs"
 
+#OPT: Default package/app's mount namespace to be used, it should be running prior to this script.
+NAME_SPACE="init" # This is the default namespace for android system
+#NAME_SPACE="com.termux"
+
 #OPT: Shred the old data after copying to encrypted container
 SHRED_OLD=true
 
@@ -64,6 +68,9 @@ function check_dependency(){
         echo "Please configure them by editing the IMG_PATH and MNT_PATH in script."
         exit 1
     fi
+
+    ns_pid=$(sudo pidof "$NAME_SPACE") || { echo "ERROR: Couldn't find pid of $NAME_SPACE, is it running?"; exit 13; }
+    ns_pid=$(echo $ns_pid | tr ' ' '\n' | sort -n | head -n 1)
 }
 
 # Function that: Binds loopback & Formats & Encrypts & Mkfs & Mounts if necessary.
@@ -108,11 +115,18 @@ function load_luks(){
     fi
 
     # Mount the mapper device if not already mounted.
+    touch $MNT_PATH/.insecure # If this file still present after mount, then mount failed.
     if ! mount | grep /dev/mapper/$MAP_NAME; then
         #sudo mount /dev/mapper/$MAP_NAME $MNT_PATH || {                 # Mount only for termux namespace
-        sudo nsenter -t 1 -m mount /dev/mapper/$MAP_NAME $MNT_PATH || {  # Make mount available to all namespaces
+        sudo nsenter -t $ns_pid -m mount /dev/mapper/$MAP_NAME $MNT_PATH || {  # Make mount available to all namespaces
             echo "ERROR: Couldn't mount the mapper."; exit 6; }
-        echo " - Successfully mounted the $MAP_NAME at $MNT_PATH"
+        if [[ -f $MNT_PATH/insecure ]]; then
+            echo "WARNING: Mount success, but only visible to root namespace."
+            echo "This happens because of your SU binary or android system, reports are appreciated."
+            echo "You can still edit the NAME_SPACE variable in the script to make it visible to your app."
+        else
+            echo " - Successfully mounted the $MAP_NAME at $MNT_PATH"
+        fi
     else
         echo " - Device already mounted at above locations"
     fi
@@ -124,9 +138,9 @@ function eject_luks(){
     set -o pipefail
     # Unmount all mount points from pid 1 namespace
     while : ; do
-        mounts=$(sudo nsenter -t 1 -m mount | grep /dev/mapper/$MAP_NAME ) || break
+        mounts=$(sudo nsenter -t $ns_pid -m mount | grep /dev/mapper/$MAP_NAME ) || break
         mnt=$(awk -F ' on ' '{print $2}' <<< $mounts | awk -F ' type ' '{print $1}' | head -n 1)
-        sudo nsenter -t 1 -m umount "$mnt" || { echo "ERROR: Couldn't unmount $mnt , program exiting."; exit 7; }
+        sudo nsenter -t $ns_pid -m umount "$mnt" || { echo "ERROR: Couldn't unmount $mnt , program exiting."; exit 7; }
         echo " - Unmounted: $mnt"
     done
 
@@ -167,6 +181,7 @@ function shred_old_data(){
 function encrypt_app(){
     PKG=$1
 
+
     # Kill if application is running.
     pid=$(sudo pidof $PKG) && {
         sudo kill -s9 $pid
@@ -185,14 +200,14 @@ function encrypt_app(){
         DEST=$2
         read owner security <<< $(su -c "ls -lZd $SRC" | awk '{print $3":"$4" "$5}')
         perm=$(sudo stat -c "%a" $SRC)
-        mkdir -p "$DEST"
+        sudo mkdir -p "$DEST"
         sudo cp -r $SRC/. "$DEST" || { echo "ERROR: Couldn't copy data to $DEST"; exit 13; }
         sudo chown -R $owner "$DEST"
         sudo chmod -R $perm "$DEST"
         sudo chcon -R $security "$DEST"
     }
 
-    mkdir -p "$MNT_PATH/apps/$PKG"
+    sudo mkdir -p "$MNT_PATH/apps/$PKG"
 
     # Copy the app data to the encrypted image & shred the old data if enabled.
     while IFS= read -r line; do
@@ -217,7 +232,7 @@ function encrypt_extra_folder(){
     pkg=$1
     folder=$2
     [[ ! -d "$folder" ]] && { echo "ERROR: Couldn't find the folder at $folder"; exit 14; }
-    mkdir -p "$MNT_PATH/apps/$pkg/extra"
+    sudo mkdir -p "$MNT_PATH/apps/$pkg/extra"
     sudo cp -r $folder "$MNT_PATH/apps/$pkg/" || { echo "ERROR: Couldn't copy data to $MNT_PATH/apps/$pkg/extra"; exit 15; }
     echo " - Successfully moved $folder to encrypted image!"
     [[ "$SHRED_OLD" == "true" ]] && shred_old_data "$folder"
