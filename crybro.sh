@@ -32,6 +32,16 @@ TYPE=luks2
 #OPT: Default name of the LUKS device for the mapper, (can be anything)
 MAP_NAME="cry_fs"
 
+#OPT: Shred the old data after copying to encrypted container
+SHRED_OLD=true
+
+#OPT: Folders to look for app data and their custom names in the encrypted image
+ENC_PATHS="
+/data/data/<pkg>                   internal_data
+/data/media/0/Android/media/<pkg>  media
+/data/media/0/Android/data/<pkg>   external_data
+/data/media/0/Android/obb/<pkg>    obb
+"
 
 # Validate if everything is set correctly
 function check_dependency(){
@@ -50,7 +60,7 @@ function check_dependency(){
     IMG_PATH=$(readlink -fve "$IMG_PATH");file1=$?
     MNT_PATH=$(readlink -fve "$MNT_PATH");file2=$?
     if [[ $file1!=0 || $file2!=0 ]]; then
-        echo "ERROR: The mount folder or the container file is not configured or doesn't exist."
+        echo "ERROR: The mount folder or the container file is not configured / doesn't exist / bad permissions."
         echo "Please configure them by editing the IMG_PATH and MNT_PATH in script."
         exit 1
     fi
@@ -142,12 +152,122 @@ function eject_luks(){
     echo " - Successfully released loopback device."
 }
 
+# Shred the old data after copied to encrypted image. 
+function shred_old_data(){
+    if [[ $(su -c "getenforce") == "Enforcing" ]]; then
+        su -c "setenforce 0"
+        disabled_selinux=true
+    fi
+    sudo find $1/* -exec shred -vun 3 {} \; 1>/dev/null
+    sudo rm -rf $1/*
+    [[ "$disabled_selinux" == "true" ]] && su -c "setenforce 1"
+}
+
+# Move an application to the encrypted image
+function encrypt_app(){
+    PKG=$1
+
+    # Kill if application is running.
+    pid=$(sudo pidof $PKG) && {
+        sudo kill -s9 $pid
+        echo " - Killed the running $PKG"
+    }
+
+    # Check if application really exist.
+    if ! sudo ls "/data/data/$PKG" &>/dev/null; then
+        echo "ERROR: Couldn't find $1 at /data/data/, incorrect pkg name?"
+        exit 12;
+    fi
+
+    # Copy folder to encrypted image with correct user, permissions & security context.
+    function copy_to_crypt(){
+        SRC=$1
+        DEST=$2
+        read owner security <<< $(su -c "ls -lZd $SRC" | awk '{print $3":"$4" "$5}')
+        perm=$(sudo stat -c "%a" $SRC)
+        cp -r $SRC "$DEST" || { echo "ERROR: Couldn't copy data to $DEST"; exit 13; }
+        sudo chown -R $owner "$DEST"
+        sudo chmod -R $perm "$DEST"
+        sudo chcon -R $security "$DEST"
+    }
+
+    mkdir -p "$MNT_PATH/apps/$PKG"
+
+    # Copy the app data to the encrypted image & shred the old data if enabled.
+    echo "$ENC_PATHS" | while IFS= read -r line; do
+        [[ "$line" == "" ]] && continue
+        read path name <<< $( sed "s/<pkg>/$PKG/g" <<< $line)
+        ! sudo ls "$path/$PKG" &>/dev/null && continue
+        copy_to_crypt "$path/$PKG" "$MNT_PATH/apps/$PKG/$name"
+        echo " - Moved to encrypted \`$name\`"
+        [[ "$SHRED_OLD" == "true" ]] && {
+            shred_old_data "$path/$PKG"
+            echo " - Shredded old \`$path/$PKG\`"
+        }
+    done
+
+    echo -e "\n - Successfully moved $PKG to encrypted image!\n"
+    echo "WARNING: There could be more data in other locations, such as Downloads/??? Pictures/??? etc."
+    echo -e "You can move them manually to the encrypted image by:\n   $0 enc_extra $PKG <PATH_TO_FOLDER>"
+}
+
+# Move an extra folder to the encrypted image
+function encrypt_extra_folder(){
+    pkg=$1
+    folder=$2
+    [[ ! -d "$folder" ]] && { echo "ERROR: Couldn't find the folder at $folder"; exit 14; }
+    mkdir -p "$MNT_PATH/apps/$pkg/extra"
+    cp -r $folder "$MNT_PATH/apps/$pkg/" || { echo "ERROR: Couldn't copy data to $MNT_PATH/apps/$pkg/extra"; exit 15; }
+    echo " - Successfully moved $folder to encrypted image!"
+    [[ "$SHRED_OLD" == "true" ]] && shred_old_data "$folder"
+    echo " - Shredded the old $folder"
+    echo "$folder" >> "$MNT_PATH/apps/$pkg/extra/mountpoints.list"
+}
+
+# Mount all folders of an application from the encrypted image to the android filesystem
+function load_app(){
+    PKG=$1
+    [[ ! -d "$MNT_PATH/apps/$PKG" ]] && { echo "ERROR: Couldn't find the app at $MNT_PATH/apps/$PKG"; exit 16; }
+    echo "$ENC_PATHS" | while IFS= read -r line; do
+        [[ "$line" == "" ]] && continue
+        read path name <<< $( sed "s/<pkg>/$PKG/g" <<< $line)
+        [[ ! -d "$MNT_PATH/apps/$PKG/$name" ]] && continue
+        sudo nsenter -t 1 -m mount --bind "$MNT_PATH/apps/$PKG/$name" "$path/$PKG" || { echo "ERROR: Couldn't mount $name"; exit 17; }
+        echo " - Mounted $name to $path/<package>"
+    done
+
+    # Mount extra folders if available
+    if [[ -f "$MNT_PATH/apps/$PKG/extra/mountpoints.list" ]]; then
+        cat "$MNT_PATH/apps/$PKG/extra/mountpoints.list" | while IFS= read -r folder; do
+            name=$(basename $folder)
+            sudo nsenter -t 1 -m mount --bind "$MNT_PATH/apps/$PKG/extra/$name" "$folder" || { echo "ERROR: Couldn't mount $folder"; exit 18; }
+            echo " - Mounted $folder"
+        done
+    fi
+}
+
+help_text="USAGE: $0 [load|eject|enc_app|enc_extra|load_app] [pkg_name|pkg_name folder_path]\n\n\
+  load:                       Mount the encrypted image to the android filesystem\n\
+  eject:                      Unmount the encrypted image\n\
+  enc_app <package>:          Move an app to the encrypted image\n\
+  enc_extra <package> <path>: Move an extra folder of app to the image\n\
+  load_app <package:          Mount all folders from encrypted image to android fs\n\n\n\
+Example: $0 enc_app org.telegram.messenger\n\
+         $0 enc_extra org.telegram.messenger /sdcard/Telegram\n\
+Don't forget to configure the IMG_PATH and MNT_PATH in the script if you haven't already.\n"
+
 check_dependency
 if [[ "$1" == "load" ]];then
     load_luks
 elif [[ "$1" == "eject" ]];then
     eject_luks
+elif [[ "$1" == "enc_app" && "$2" != "" ]];then
+    encrypt_app $2
+elif [[ "$1" == "enc_extra" && "$3" != ""]];then
+    encrypt_extra_folder $2 $3
+elif [[ "$1" == "load_app" && "$2" != "" ]];then
+    load_app $2
 else
-    echo -e "USAGE:\n  $0 load\n  $0 eject\n\nConfigure the mountpoint and image path in script."
+    printf "$help_text"
     exit 127
 fi
