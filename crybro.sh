@@ -158,8 +158,8 @@ function shred_old_data(){
         su -c "setenforce 0"
         disabled_selinux=true
     fi
-    sudo find $1/* -exec shred -vun 3 {} \; 1>/dev/null
-    sudo rm -rf $1/*
+    sudo find $1 -mindepth 1 -exec shred -vun 3 "{}" \; 1>/dev/null
+    sudo find $1 -mindepth 1 -exec rmdir -rf "{}" \; 1>/dev/null
     [[ "$disabled_selinux" == "true" ]] && su -c "setenforce 1"
 }
 
@@ -186,7 +186,7 @@ function encrypt_app(){
         read owner security <<< $(su -c "ls -lZd $SRC" | awk '{print $3":"$4" "$5}')
         perm=$(sudo stat -c "%a" $SRC)
         mkdir -p "$DEST"
-        sudo cp -r $SRC/* "$DEST" || { echo "ERROR: Couldn't copy data to $DEST"; exit 13; }
+        sudo cp -r $SRC/. "$DEST" || { echo "ERROR: Couldn't copy data to $DEST"; exit 13; }
         sudo chown -R $owner "$DEST"
         sudo chmod -R $perm "$DEST"
         sudo chcon -R $security "$DEST"
