@@ -8,7 +8,7 @@
 # You have to create an empty container before using this script
 #   sudo dd if=/dev/zero of=/path/to/your/file.img bs=1M count=4096
 # OR:
-#   fallocate -l 4G file.img 
+#   fallocate -l 4G file.img
 #
 # Please configure the IMG_PATH to be the location of the image file you created
 # and MNT_PATH to be the mount point of your decrypted partition
@@ -59,7 +59,7 @@ function check_dependency(){
     # Fetch the full path of given files, validate their existence
     IMG_PATH=$(readlink -fve "$IMG_PATH");file1=$?
     MNT_PATH=$(readlink -fve "$MNT_PATH");file2=$?
-    if [[ $file1!=0 || $file2!=0 ]]; then
+    if [[ $file1 -ne 0 || $file2 -ne 0 ]]; then
         echo "ERROR: The mount folder or the container file is not configured / doesn't exist / bad permissions."
         echo "Please configure them by editing the IMG_PATH and MNT_PATH in script."
         exit 1
@@ -185,7 +185,8 @@ function encrypt_app(){
         DEST=$2
         read owner security <<< $(su -c "ls -lZd $SRC" | awk '{print $3":"$4" "$5}')
         perm=$(sudo stat -c "%a" $SRC)
-        cp -r $SRC "$DEST" || { echo "ERROR: Couldn't copy data to $DEST"; exit 13; }
+        mkdir -p "$DEST"
+        sudo cp -r $SRC/* "$DEST" || { echo "ERROR: Couldn't copy data to $DEST"; exit 13; }
         sudo chown -R $owner "$DEST"
         sudo chmod -R $perm "$DEST"
         sudo chcon -R $security "$DEST"
@@ -194,17 +195,17 @@ function encrypt_app(){
     mkdir -p "$MNT_PATH/apps/$PKG"
 
     # Copy the app data to the encrypted image & shred the old data if enabled.
-    echo "$ENC_PATHS" | while IFS= read -r line; do
+    while IFS= read -r line; do
         [[ "$line" == "" ]] && continue
         read path name <<< $( sed "s/<pkg>/$PKG/g" <<< $line)
-        ! sudo ls "$path/$PKG" &>/dev/null && continue
-        copy_to_crypt "$path/$PKG" "$MNT_PATH/apps/$PKG/$name"
+        ! sudo ls "$path" &>/dev/null && continue
+        copy_to_crypt "$path" "$MNT_PATH/apps/$PKG/$name"
         echo " - Moved to encrypted \`$name\`"
         [[ "$SHRED_OLD" == "true" ]] && {
-            shred_old_data "$path/$PKG"
-            echo " - Shredded old \`$path/$PKG\`"
+            shred_old_data "$path"
+            echo " - Shredded old \`$path\`"
         }
-    done
+    done <<< "$ENC_PATHS"
 
     echo -e "\n - Successfully moved $PKG to encrypted image!\n"
     echo "WARNING: There could be more data in other locations, such as Downloads/??? Pictures/??? etc."
@@ -217,7 +218,7 @@ function encrypt_extra_folder(){
     folder=$2
     [[ ! -d "$folder" ]] && { echo "ERROR: Couldn't find the folder at $folder"; exit 14; }
     mkdir -p "$MNT_PATH/apps/$pkg/extra"
-    cp -r $folder "$MNT_PATH/apps/$pkg/" || { echo "ERROR: Couldn't copy data to $MNT_PATH/apps/$pkg/extra"; exit 15; }
+    sudo cp -r $folder "$MNT_PATH/apps/$pkg/" || { echo "ERROR: Couldn't copy data to $MNT_PATH/apps/$pkg/extra"; exit 15; }
     echo " - Successfully moved $folder to encrypted image!"
     [[ "$SHRED_OLD" == "true" ]] && shred_old_data "$folder"
     echo " - Shredded the old $folder"
@@ -228,21 +229,21 @@ function encrypt_extra_folder(){
 function load_app(){
     PKG=$1
     [[ ! -d "$MNT_PATH/apps/$PKG" ]] && { echo "ERROR: Couldn't find the app at $MNT_PATH/apps/$PKG"; exit 16; }
-    echo "$ENC_PATHS" | while IFS= read -r line; do
+    while IFS= read -r line; do
         [[ "$line" == "" ]] && continue
         read path name <<< $( sed "s/<pkg>/$PKG/g" <<< $line)
         [[ ! -d "$MNT_PATH/apps/$PKG/$name" ]] && continue
-        sudo nsenter -t 1 -m mount --bind "$MNT_PATH/apps/$PKG/$name" "$path/$PKG" || { echo "ERROR: Couldn't mount $name"; exit 17; }
-        echo " - Mounted $name to $path/<package>"
-    done
+        sudo nsenter -t 1 -m mount --bind "$MNT_PATH/apps/$PKG/$name" "$path" || { echo "ERROR: Couldn't mount $name"; exit 17; }
+        echo " - Mounted $name to $path"
+    done <<< "$ENC_PATHS"
 
     # Mount extra folders if available
     if [[ -f "$MNT_PATH/apps/$PKG/extra/mountpoints.list" ]]; then
-        cat "$MNT_PATH/apps/$PKG/extra/mountpoints.list" | while IFS= read -r folder; do
+        while IFS= read -r folder; do
             name=$(basename $folder)
             sudo nsenter -t 1 -m mount --bind "$MNT_PATH/apps/$PKG/extra/$name" "$folder" || { echo "ERROR: Couldn't mount $folder"; exit 18; }
             echo " - Mounted $folder"
-        done
+        done < "$MNT_PATH/apps/$PKG/extra/mountpoints.list"
     fi
 }
 
@@ -253,8 +254,8 @@ help_text="USAGE: $0 [load|eject|enc_app|enc_extra|load_app] [pkg_name|pkg_name 
   enc_extra <package> <path>: Move an extra folder of app to the image\n\
   load_app <package:          Mount all folders from encrypted image to android fs\n\n\n\
 Example: $0 enc_app org.telegram.messenger\n\
-         $0 enc_extra org.telegram.messenger /sdcard/Telegram\n\
-Don't forget to configure the IMG_PATH and MNT_PATH in the script if you haven't already.\n"
+         $0 enc_extra org.telegram.messenger /sdcard/Telegram\n\n\
+Don't forget to configure the IMG_PATH and MNT_PATH in the script if you haven't already.\n\n"
 
 check_dependency
 if [[ "$1" == "load" ]];then
@@ -263,7 +264,7 @@ elif [[ "$1" == "eject" ]];then
     eject_luks
 elif [[ "$1" == "enc_app" && "$2" != "" ]];then
     encrypt_app $2
-elif [[ "$1" == "enc_extra" && "$3" != ""]];then
+elif [[ "$1" == "enc_extra" && "$3" != "" ]];then
     encrypt_extra_folder $2 $3
 elif [[ "$1" == "load_app" && "$2" != "" ]];then
     load_app $2
