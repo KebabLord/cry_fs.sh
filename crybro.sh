@@ -198,21 +198,28 @@ function encrypt_app(){
     function copy_to_crypt(){
         SRC=$1
         DEST=$2
-        read owner security <<< $(su -c "ls -lZd $SRC" | awk '{print $3":"$4" "$5}')
+        lsout=$(su -c "ls -lZd $SRC")
+        read owner security <<< $(awk '{print $3":"$4" "$5}' <<< $lsout)
         perm=$(sudo stat -c "%a" $SRC)
         sudo mkdir -p "$DEST"
         sudo cp -r $SRC/. "$DEST" || { echo "ERROR: Couldn't copy data to $DEST"; exit 13; }
         sudo chown -R $owner "$DEST"
         sudo chmod -R $perm "$DEST"
-        sudo chcon -R $security "$DEST"
+        sudo chcon $security "$DEST"
     }
+
+
+    if [[ $(su -c "getenforce") == "Enforcing" ]]; then
+        sudo setenforce 0
+        disabled_selinux=true
+    fi
 
     sudo mkdir -p "$MNT_PATH/apps/$PKG"
 
     # Copy the app data to the encrypted image & shred the old data if enabled.
-    while IFS= read -r line; do
+    for line in $( printf $ENC_PATHS );do
         [[ "$line" == "" ]] && continue
-        read path name <<< $( sed "s/<pkg>/$PKG/g" <<< $line)
+        IFS=";" read path name <<< $( sed "s/pkg/$PKG/g" <<< $line)
         ! sudo ls "$path" &>/dev/null && continue
         copy_to_crypt "$path" "$MNT_PATH/apps/$PKG/$name"
         echo " - Moved to encrypted \`$name\`"
@@ -220,8 +227,9 @@ function encrypt_app(){
             shred_old_data "$path"
             echo " - Shredded old \`$path\`"
         }
-    done <<< "$ENC_PATHS"
+    done
 
+    [[ "$disabled_selinux" == "true" ]] && su -c "setenforce 1"
     echo -e "\n - Successfully moved $PKG to encrypted image!\n"
     echo "WARNING: There could be more data in other locations, such as Downloads/??? Pictures/??? etc."
     echo -e "You can move them manually to the encrypted image by:\n   $0 enc_extra $PKG <PATH_TO_FOLDER>"
