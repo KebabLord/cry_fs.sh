@@ -41,10 +41,10 @@ SHRED_OLD=true
 
 #OPT: Folders to look for app data and their custom names in the encrypted image
 ENC_PATHS="
-/data/data/<pkg>                   internal_data
-/data/media/0/Android/media/<pkg>  media
-/data/media/0/Android/data/<pkg>   external_data
-/data/media/0/Android/obb/<pkg>    obb
+/data/data/<pkg>;internal_data
+/data/media/0/Android/media/<pkg>;media
+/data/media/0/Android/data/<pkg>;external_data
+/data/media/0/Android/obb/<pkg>;obb
 "
 
 # Validate if everything is set correctly
@@ -217,9 +217,9 @@ function encrypt_app(){
     sudo mkdir -p "$MNT_PATH/apps/$PKG"
 
     # Copy the app data to the encrypted image & shred the old data if enabled.
-    for line in $( printf $ENC_PATHS );do
+    for line in $ENC_PATHS;do
         [[ "$line" == "" ]] && continue
-        IFS=";" read path name <<< $( sed "s/pkg/$PKG/g" <<< $line)
+        IFS=";" read path name <<< $( sed "s/<pkg>/$PKG/g" <<< $line)
         ! sudo ls "$path" &>/dev/null && continue
         copy_to_crypt "$path" "$MNT_PATH/apps/$PKG/$name"
         echo " - Moved to encrypted \`$name\`"
@@ -252,13 +252,13 @@ function encrypt_extra_folder(){
 function load_app(){
     PKG=$1
     [[ ! -d "$MNT_PATH/apps/$PKG" ]] && { echo "ERROR: Couldn't find the app at $MNT_PATH/apps/$PKG"; exit 16; }
-    while IFS= read -r line; do
+    for line in $ENC_PATHS;do
         [[ "$line" == "" ]] && continue
-        read path name <<< $( sed "s/<pkg>/$PKG/g" <<< $line)
+        IFS=";" read path name <<< $( sed "s/<pkg>/$PKG/g" <<< $line)
         [[ ! -d "$MNT_PATH/apps/$PKG/$name" ]] && continue
         sudo nsenter -t 1 -m mount --bind "$MNT_PATH/apps/$PKG/$name" "$path" || { echo "ERROR: Couldn't mount $name"; exit 17; }
         echo " - Mounted $name to $path"
-    done <<< "$ENC_PATHS"
+    done
 
     # Mount extra folders if available
     if [[ -f "$MNT_PATH/apps/$PKG/extra/mountpoints.list" ]]; then
